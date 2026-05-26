@@ -2,3 +2,4 @@ aiogram==3.4.1
 Pillow==11.0.0
 python-dotenv==1.0.1
 Flask==3.0.3
+aiofiles==23.2.1
