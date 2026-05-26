@@ -1,7 +1,7 @@
 import os
 import io
 import logging
-import threading
+import sys
 from tempfile import NamedTemporaryFile
 
 from flask import Flask, request, jsonify
@@ -15,13 +15,23 @@ from PIL import Image
 
 # Load environment variables
 load_dotenv()
+
+# Configure logging to show everything
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
+# Check for BOT_TOKEN
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN not found in environment variables")
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+    logger.error("❌ BOT_TOKEN environment variable is not set!")
+    logger.error("Please add BOT_TOKEN in Render environment variables")
+    sys.exit(1)
+else:
+    logger.info("✅ BOT_TOKEN found (first 10 chars: {})".format(BOT_TOKEN[:10]))
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -49,15 +59,9 @@ def get_format_keyboard():
     buttons.append([InlineKeyboardButton(text="❌ Cancel", callback_data="cancel")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-# Flask health check endpoint (required by Render)
-@app.route('/')
-@app.route('/health')
-def health_check():
-    return "Bot is running", 200
-
-# Telegram bot handlers
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
+    logger.info(f"Received /start from user {message.from_user.id}")
     await message.answer(
         "🖼️ *Image Converter Bot*\n\n"
         "Send me any image (JPG, PNG, WEBP, BMP) and I'll convert it to your preferred format.\n\n"
@@ -105,7 +109,7 @@ async def handle_image(message: types.Message, state: FSMContext):
         )
 
     except Exception as e:
-        logger.error(f"Error: {e}")
+        logger.error(f"Error handling image: {e}")
         await message.answer("❌ Failed to process your image. Please try again.")
 
 @dp.callback_query(ConvertStates.waiting_for_format)
@@ -132,7 +136,6 @@ async def process_format_selection(callback: types.CallbackQuery, state: FSMCont
     try:
         original = Image.open(io.BytesIO(image_bytes))
 
-        # Convert RGBA to RGB for JPEG
         if format_ext == "jpg" and original.mode in ("RGBA", "P"):
             rgb_image = Image.new("RGB", original.size, (255, 255, 255))
             rgb_image.paste(original, mask=original.split()[-1] if original.mode == "RGBA" else None)
@@ -161,16 +164,32 @@ async def process_format_selection(callback: types.CallbackQuery, state: FSMCont
         await callback.message.answer("❌ Conversion failed.")
         await state.clear()
 
-def run_bot():
-    """Run the bot in a separate thread"""
-    import asyncio
-    asyncio.run(dp.start_polling(bot))
+async def run_bot():
+    """Run the bot with proper error handling"""
+    try:
+        logger.info("🚀 Starting bot polling...")
+        await dp.start_polling(bot)
+    except Exception as e:
+        logger.error(f"❌ Bot polling failed: {e}")
+        raise
+
+# Flask health check endpoint (optional, for Render if needed)
+@app.route('/')
+@app.route('/health')
+def health_check():
+    return "Bot is running", 200
 
 if __name__ == "__main__":
-    # Start bot in background thread
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-    logger.info("Starting Flask server for Render...")
-    # Run Flask on Render's assigned port
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    import asyncio
+    import threading
+    
+    # Run Flask in a separate thread (for health checks)
+    def run_flask():
+        port = int(os.environ.get("PORT", 5000))
+        app.run(host="0.0.0.0", port=port, use_reloader=False)
+    
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Run the bot
+    asyncio.run(run_bot())
