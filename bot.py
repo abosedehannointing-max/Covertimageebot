@@ -1,8 +1,10 @@
 import os
 import io
 import logging
+import threading
 from tempfile import NamedTemporaryFile
 
+from flask import Flask, request, jsonify
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -20,6 +22,9 @@ if not BOT_TOKEN:
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Initialize Flask app
+app = Flask(__name__)
 
 # Initialize bot and dispatcher
 bot = Bot(token=BOT_TOKEN)
@@ -44,6 +49,13 @@ def get_format_keyboard():
     buttons.append([InlineKeyboardButton(text="❌ Cancel", callback_data="cancel")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+# Flask health check endpoint (required by Render)
+@app.route('/')
+@app.route('/health')
+def health_check():
+    return "Bot is running", 200
+
+# Telegram bot handlers
 @dp.message(Command("start"))
 async def start_command(message: types.Message):
     await message.answer(
@@ -149,10 +161,16 @@ async def process_format_selection(callback: types.CallbackQuery, state: FSMCont
         await callback.message.answer("❌ Conversion failed.")
         await state.clear()
 
-async def main():
-    logger.info("Starting Image Converter Bot...")
-    await dp.start_polling(bot)
+def run_bot():
+    """Run the bot in a separate thread"""
+    import asyncio
+    asyncio.run(dp.start_polling(bot))
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    # Start bot in background thread
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    logger.info("Starting Flask server for Render...")
+    # Run Flask on Render's assigned port
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
